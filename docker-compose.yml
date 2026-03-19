@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: asir_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin_fichaje
+      POSTGRES_PASSWORD: password_muy_segura
+      POSTGRES_DB: gestion_fichajes
+    volumes:
+      - ./db_data:/var/lib/postgresql/data
+
+  backend:
+    build: ./backend
+    container_name: asir_backend
+    volumes:
+      - ./backend:/app
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://admin_fichaje:password_muy_segura@db/gestion_fichajes
+    depends_on:
+      - db
+
+  adminer:
+    image: adminer
+    container_name: asir_adminer
+    ports:
+      - "8080:8080"
+
+  frontend:
+    build: ./frontend
+    container_name: asir_frontend
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "8501:8501"
+    depends_on:
+      - backend
+
+    image: postgis/postgis:15-3.3-alpine
+
