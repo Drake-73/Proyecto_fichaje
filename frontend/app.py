@@ -2,123 +2,102 @@ import streamlit as st
 import requests
 import pandas as pd
 from streamlit_js_eval import get_geolocation
+from datetime import datetime
 
-st.set_page_config(page_title="Acceso ASIR GPS", page_icon="🔐")
+# Configuramos la web para que parezca que sabemos lo que hacemos
+st.set_page_config(page_title="ASIR GPS Control", page_icon="🕒")
 
 API_URL = "http://backend:8000"
 
+# Memoria de pez para que Streamlit no olvide quién eres al recargar
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_info = {}
 
+# Si no has pasado por el login, no ves ni los buenos días
 if not st.session_state.logged_in:
-    st.title("🔐 Control de Acceso")
+    st.title("🔐 Identifícate o vete a casa")
     with st.form("login_form"):
         email = st.text_input("Email")
-        password = st.text_input("Contraseña", type="password")
-        submit = st.form_submit_button("Entrar")
-        if submit:
+        password = st.text_input("Clave", type="password")
+        if st.form_submit_button("Entrar"):
             try:
                 res = requests.post(f"{API_URL}/login?email={email}&password={password}")
                 if res.status_code == 200:
                     st.session_state.logged_in = True
                     st.session_state.user_info = res.json()
                     st.rerun()
-                else:
-                    st.error("Credenciales incorrectas")
-            except:
-                st.error("Error de conexión con el servidor")
+                else: st.error("Email o clave mal. Concéntrate.")
+            except: st.error("Servidor KO. El Admin (tú) ha roto algo.")
     st.stop()
 
+# Menú lateral para sentirte importante
 user = st.session_state.user_info
 st.sidebar.success(f"Usuario: {user['nombre']}")
 if st.sidebar.button("Cerrar Sesión"):
     st.session_state.logged_in = False
     st.rerun()
 
-menu = ["Fichar", "Ver mis registros"]
-if user['rol'] == 'admin':
-    menu.append("Administración")
-
-choice = st.sidebar.selectbox("Menú", menu)
+menu = ["Fichar", "Mis Registros"]
+if user['rol'] == 'admin': menu.append("Administración")
+choice = st.sidebar.selectbox("¿A dónde vas?", menu)
 
 if choice == "Fichar":
-    st.title(f"🚀 Panel de Fichaje")
-    loc = get_geolocation()
+    st.title("🚀 Registro de Jornada")
+    loc = get_geolocation() # Intentamos espiar tu posición
     
-    opciones_fichaje = {
-        " ENTRADA TRABAJO": "entrada",
-        " DESCANSO": "descanso",
-        " COMIDA": "comida",
-        " AUSENCIA PTE. JUSTIFICAR": "ausencia",
-        " SALIDA TRABAJO": "salida",
-        " HUELGA": "huelga"
-    }
-
-    seleccion = st.selectbox("¿Qué acción vas a realizar?", list(opciones_fichaje.keys()))
-    tipo_cod = opciones_fichaje[seleccion]
+    opciones = {"0000 - ENTRADA": "entrada", "0001 - DESCANSO": "descanso", 
+                "0005 - COMIDA": "comida", "0007 - SALIDA": "salida"}
+    seleccion = st.selectbox("¿Qué acción vas a realizar?", list(opciones.keys()))
 
     if loc:
-        coords = loc.get('coords', loc)
-        lat = coords.get('latitude') or 36.6850
-        lon = coords.get('longitude') or -6.1260
-        
-        st.info(f"📍 Ubicación detectada")
-        
-        if st.button("Confirmar Registro"):
-            try:
-                res = requests.post(f"{API_URL}/fichar/{user['user_id']}?tipo={tipo_cod}&lat={lat}&lon={lon}")
-                if res.status_code == 200:
-                    st.success(f"Registrado: {seleccion}")
-                else:
-                    st.error("Error en el servidor")
-            except:
-                st.error("Error de conexión")
-    else:
-        st.warning("Esperando GPS...")
+        c = loc.get('coords', loc)
+        lat, lon = c.get('latitude', 36.68), c.get('longitude', -6.12)
+        if st.button("Confirmar Fichaje"):
+            requests.post(f"{API_URL}/fichar/{user['user_id']}?tipo={opciones[seleccion]}&lat={lat}&lon={lon}")
+            st.success(f"Registrado: {seleccion}. No te acostumbres.")
+    else: st.warning("Esperando GPS... o que dejes de bloquearlo.")
 
-elif choice == "Ver mis registros":
-    st.subheader("📍 Tu Actividad")
+elif choice == "Mis Registros":
+    st.title("📊 Tu historial (y tus horas extra)")
     res = requests.get(f"{API_URL}/fichajes/{user['user_id']}")
-    if res.status_code == 200:
-        datos = res.json()
-        if datos:
-            df = pd.DataFrame(datos)
-            
-            st.write("📂 **Exportar:**")
-            st.download_button("Descargar CSV", df.to_csv(index=False), f"fichajes_{user['user_id']}.csv", "text/csv")
-            
-            st.dataframe(df[['tipo', 'timestamp', 'latitud', 'longitud']])
-            
-            map_data = df[['latitud', 'longitud']].dropna()
-            map_data['lat'] = pd.to_numeric(map_data['latitud'], errors='coerce')
-            map_data['lon'] = pd.to_numeric(map_data['longitud'], errors='coerce')
-            map_data = map_data.dropna(subset=['lat', 'lon'])
-            
-            if not map_data.empty:
-                st.map(map_data)
+    if res.status_code == 200 and res.json():
+        df = pd.DataFrame(res.json())
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        
+        # --- CÁLCULO DE HORAS (Matemáticas para adultos) ---
+        hoy = datetime.now().date()
+        df_hoy = df[df['timestamp'].dt.date == hoy].sort_values('timestamp')
+        
+        if len(df_hoy) >= 2:
+            h_in = df_hoy[df_hoy['tipo'] == 'entrada']['timestamp'].min()
+            h_out = df_hoy[df_hoy['tipo'] == 'salida']['timestamp'].max()
+            if h_in and h_out:
+                total = (h_out - h_in).total_seconds() / 3600
+                neto = max(0, total 1)  # Restamos la hora de comer que te hemos regalado
+                extra = max(0, neto - 8) # Más de 8h es explotación o vicio
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Horas Totales", f"{total:.2f}h")
+                c2.metric("Trabajo Neto", f"{neto:.2f}h")
+                c3.metric("Extras 🔥", f"{extra:.2f}h")
+
+        st.dataframe(df[['tipo', 'timestamp', 'latitud', 'longitud']])
+        
+        # El mapa para ver si fichas desde el bar
+        m_data = df[['latitud', 'longitud']].rename(columns={'latitud':'lat', 'longitud':'lon'}).dropna()
+        st.map(m_data)
 
 elif choice == "Administración":
-    st.title("🛡️ Panel de Control (Admin)")
-    
-    tab1, tab2 = st.tabs(["👥 Gestión de Usuarios", "📊 Fichajes Globales"])
-    
-    with tab1:
-        st.subheader("Usuarios Registrados")
-        try:
-            res = requests.get(f"{API_URL}/usuarios/")
-            if res.status_code == 200:
-                usuarios = res.json()
-                st.dataframe(pd.DataFrame(usuarios))
-            else:
-                st.error("No se pudo obtener la lista de usuarios")
-        except:
-            st.error("Error de conexión con el Backend")
-
-    with tab2:
-        st.subheader("Historial de toda la empresa")
-        # Necesitamos un endpoint para ver TODO. Por ahora usaremos el de listar usuarios
-        # pero lo ideal es ver los fichajes. Vamos a mostrar un mensaje de aviso:
-        st.info("Aquí verás los fichajes de todos los empleados en el futuro.")
-        if st.button("Actualizar Vista Global"):
-            st.rerun()
+    st.title("🛡️ Panel de Dios (Admin)")
+    t1, t2 = st.tabs(["Lista Usuarios", "Alta Nueva"])
+    with t1:
+        r = requests.get(f"{API_URL}/usuarios/")
+        st.dataframe(pd.DataFrame(r.json()))
+    with t2:
+        with st.form("alta"):
+            n = st.text_input("Nombre"); e = st.text_input("Email"); p = st.text_input("Pass")
+            r_rol = st.selectbox("Rol", ["user", "admin"])
+            if st.form_submit_button("Crear"):
+                requests.post(f"{API_URL}/usuarios/?nombre={n}&email={e}&password={p}&rol={r_rol}")
+                st.success("Súbdito creado. A producir.")

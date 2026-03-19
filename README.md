@@ -17,6 +17,6 @@ Proyecto final para el ciclo de **ASIR**. Sistema de control de jornada laboral 
 - 🛡️ **Roles:** Diferenciación entre Usuario y Administrador.
 
 ## 🚀 Cómo desplegarlo
-1. Clona el repositorio: `git clone https://github.com/TU_USUARIO/proyecto-fichaje.git`
+1. Clona el repositorio: `git clone https://github.com/Drake-73/proyecto-fichaje.git`
 2. Levanta los servicios: `docker-compose up -d --build`
 3. Accede a la web: `http://localhost:8501`
