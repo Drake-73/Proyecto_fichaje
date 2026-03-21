@@ -1,0 +1,12 @@
+# No subas el veneno
+__pycache__/
+*.pyc
+.env
+venv/
+.DS_Store
+
+# No subas los datos reales (que se queden en Jerez)
+*.db
+backend/uploads/*
+!backend/uploads/.gitkeep
+db_data/
