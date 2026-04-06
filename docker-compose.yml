@@ -1,3 +1,4 @@
+
 services:
   db:
     image: postgres:15-alpine
@@ -9,34 +10,70 @@ services:
       POSTGRES_DB: gestion_fichajes
     volumes:
       - ./db_data:/var/lib/postgresql/data
+    networks:
+      - asir_network
 
   backend:
     build: ./backend
     container_name: asir_backend
+    restart: always
     volumes:
       - ./backend:/app
+      - ./pure-ftpd.pem:/app/pure-ftpd.pem:ro
     ports:
       - "8000:8000"
     environment:
-      DATABASE_URL: postgresql://admin_fichaje:password_muy_segura@db/gestion_fichajes
+      # Usamos el nombre del servicio 'db' para la conexión
+      DATABASE_URL: postgresql://admin_fichaje:password_muy_segura@db:5432/gestion_fichajes
     depends_on:
       - db
-
-  adminer:
-    image: adminer
-    container_name: asir_adminer
-    ports:
-      - "8080:8080"
+      - ftps_server
+    networks:
+      - asir_network
 
   frontend:
     build: ./frontend
     container_name: asir_frontend
+    restart: always
     volumes:
       - ./frontend:/app
     ports:
       - "8501:8501"
+    environment:
+      - API_URL=http://backend:8000
     depends_on:
       - backend
+    networks:
+      - asir_network
 
-    image: postgis/postgis:15-3.3-alpine
+  ftps_server:
+    image: stilliard/pure-ftpd
+    container_name: asir_ftps
+    restart: always
+    ports:
+      - "21:21"
+      - "30000-30009:30000-30009"
+    environment:
+      PUBLICHOST: asir_ftps
+      FTP_USER_NAME: amado
+      FTP_USER_PASS: jerez2026
+      FTP_USER_HOME: /home/amado
+      ADDED_FLAGS: "--tls=1" 
+    volumes:
+      - ./ftp_data:/home/amado
+      - ./pure-ftpd.pem:/etc/ssl/private/pure-ftpd.pem:ro
+    networks:
+      - asir_network
 
+  adminer:
+    image: adminer
+    container_name: asir_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    networks:
+      - asir_network
+
+networks:
+  asir_network:
+    driver: bridge

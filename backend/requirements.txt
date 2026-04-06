@@ -5,3 +5,5 @@ psycopg2-binary
 pydantic
 pydantic-settings
 python-multipart
+passlib
+bcrypt==3.2.2

@@ -5,248 +5,244 @@ import pandas as pd
 from streamlit_js_eval import get_geolocation
 from datetime import datetime
 
-# Configuración de la web
-st.set_page_config(page_title="ASIR GPS Control - El Gran Hermano Laboral", 
-                   page_icon="🕒",
-                   layout="wide",
-                   initial_sidebar_state="expanded")
+st.set_page_config(page_title="ASIR GPS Control", page_icon="🕒", layout="wide")
 
-# Direcciones (Interna para Streamlit, Pública para Firefox)
 API_URL = os.getenv("API_URL", "http://backend:8000")
 URL_PUBLICA = "http://localhost:8000" 
 
-# Gestión de sesión
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.user_info = {}
 if "seccion" not in st.session_state:
     st.session_state.seccion = "Fichar"
 
-# --- BLOQUE DE SEGURIDAD ---
 if not st.session_state.logged_in:
-    st.title("🔐 Identifícate o vete a casa")
-    with st.form("login_form"):
-        email = st.text_input("Email corporativo")
-        password = st.text_input("Clave", type="password")
-        if st.form_submit_button("Entrar a producir"):
-            try:
-                res = requests.post(f"{API_URL}/login", json={"email": email, "password": password})
-                if res.status_code == 200:
-                    st.session_state.logged_in = True
-                    st.session_state.user_info = res.json()
-                    st.rerun()
-                else:
-                    st.error("Credenciales de chiste. Reinténtalo.")
-            except:
-                st.error("Servidor KO. Revisa tus contenedores Docker.")
+    st.title("🔐 Identifícate")
+    with st.form("login"):
+        e = st.text_input("Email")
+        p = st.text_input("Clave", type="password")
+        if st.form_submit_button("Entrar"):
+            res = requests.post(f"{API_URL}/login", json={"email": e, "password": p})
+            if res.status_code == 200:
+                st.session_state.logged_in = True
+                st.session_state.user_info = res.json(); st.rerun()
+            else:
+                st.error("Credenciales incorrectas")
     st.stop()
 
 user = st.session_state.user_info
-st.sidebar.success(f"Bienvenido, recurso humano: {user['nombre']}")
-st.sidebar.title("🎮 Panel de Control")
+st.sidebar.success(f"Usuario: {user['nombre']}")
 
-# Navegación
-if st.sidebar.button("🚀 Fichar ahora", use_container_width=True):
-    st.session_state.seccion = "Fichar"
-if st.sidebar.button("📊 Mis Registros", use_container_width=True):
-    st.session_state.seccion = "Mis Registros"
-
+if st.sidebar.button("🚀 Fichar", use_container_width=True): st.session_state.seccion = "Fichar"
+if st.sidebar.button("📊 Registros", use_container_width=True): st.session_state.seccion = "Registros"
 if user['rol'] == 'admin':
-    try:
-        r_p_count = requests.get(f"{API_URL}/admin/preavisos/").json()
-        pendientes_n = len([p for p in r_p_count if p.get('estado', 'pendiente') == 'pendiente'])
-        label_admin = f"🛡️ Administración {'🔴' if pendientes_n > 0 else ''}"
-    except:
-        label_admin = "🛡️ Administración"
-    if st.sidebar.button(label_admin, use_container_width=True):
-        st.session_state.seccion = "Administración"
+    if st.sidebar.button("🛡️ Administración", use_container_width=True): st.session_state.seccion = "Administración"
 
-st.sidebar.divider()
-if st.sidebar.button("🏃‍♂️ CERRAR SESIÓN", use_container_width=True):
-    st.session_state.logged_in = False
-    st.rerun()
+if st.sidebar.button("🏃‍♂️ Salir", use_container_width=True):
+    st.session_state.logged_in = False; st.rerun()
 
 choice = st.session_state.seccion
 
-# --- SECCIÓN: FICHAR ---
 if choice == "Fichar":
-    st.title("🚀 Registro de Jornada - Te estamos viendo")
+    st.title("🚀 Fichar")
+    res_d = requests.get(f"{API_URL}/mis_documentos/{user['user_id']}")
+    if res_d.status_code == 200 and res_d.json():
+        for d in res_d.json():
+            st.markdown(f"{'✅' if d['leido'] else '🆕'} [{d['titulo']}]({URL_PUBLICA}/leer_documento/{d['id']})")
     
-    st.subheader("📩 Tus Documentos (El Jefe quiere que leas)")
-    try:
-        res_docs = requests.get(f"{API_URL}/mis_documentos/{user['user_id']}")
-        if res_docs.status_code == 200:
-            docs_list = res_docs.json()
-            if docs_list:
-                for d in docs_list:
-                    est = "✅ Leído" if d.get('leido') else "🆕 ¡PULSA AQUÍ!"
-                    st.markdown(f"{est} - [{d.get('titulo')}]({URL_PUBLICA}/leer_documento/{d.get('id')})")
+    loc = get_geolocation()
+    opts = {"ENTRADA": "entrada", "DESCANSO": "descanso", "COMIDA": "comida", "SALIDA": "salida"}
+    sel = st.selectbox("Estado:", list(opts.keys()))
+    if st.button("Confirmar", use_container_width=True):
+        lat, lon = (loc['coords']['latitude'], loc['coords']['longitude']) if loc else (36.68, -6.12)
+        res_fichar = requests.post(f"{API_URL}/fichar/{user['user_id']}", json={"tipo": opts[sel], "lat": lat, "lon": lon})
+        if res_fichar.status_code == 200:
+            st.success("Fichaje registrado correctamente.")
+        else:
+            st.error("No se pudo registrar el fichaje.")
+
+    st.subheader("📝 Preaviso")
+    with st.form("prev", clear_on_submit=True):
+        tp = st.selectbox("Tipo", ["Retraso", "Falta"])
+        fp = st.date_input("Día")
+        mp = st.text_area("Motivo")
+        if st.form_submit_button("Enviar"):
+            res_prev = requests.post(f"{API_URL}/preavisos/", json={"usuario_id": user['user_id'], "tipo": tp, "fecha": str(fp), "motivo": mp})
+            if res_prev.status_code == 200:
+                st.success("Preaviso enviado correctamente.")
             else:
-                st.info("Sin documentos nuevos.")
-    except:
-        st.error("Error al cargar documentos.")
+                st.error("No se pudo enviar el preaviso.")
 
-    st.divider()
-    loc = get_geolocation() 
-    lat, lon = (loc.get('coords', loc).get('latitude'), loc.get('coords', loc).get('longitude')) if loc else (None, None)
-    
-    opts = {"0000 - ENTRADA": "entrada", "0001 - DESCANSO": "descanso", "0005 - COMIDA": "comida", "0007 - SALIDA": "salida"}
-    sel = st.selectbox("Estado actual:", list(opts.keys()))
-
-    if st.button("Confirmar Fichaje (y enviar posición)", use_container_width=True):
-        f_lat, f_lon = (lat if lat else 36.68, lon if lon else -6.12)
-        requests.post(f"{API_URL}/fichar/{user['user_id']}", json={"tipo": opts[sel], "lat": f_lat, "lon": f_lon})
-        st.success("✅ Fichaje registrado.")
-
-    st.divider()
-    st.subheader("📝 ¿Vas a faltar? Miénteme aquí")
-    with st.form("form_preaviso_tropa", clear_on_submit=True):
-        t_p = st.selectbox("Incidencia:", ["Retraso", "Falta"])
-        f_p = st.date_input("Día:")
-        m_p = st.text_area("Motivo:")
-        if st.form_submit_button("Enviar Aviso"):
-            requests.post(f"{API_URL}/preavisos/", json={"usuario_id": user['user_id'], "tipo": t_p, "fecha": str(f_p), "motivo": m_p})
-            st.success("Aviso enviado.")
-
-    st.subheader("📋 Estado de mis avisos")
-    try:
-        res_m = requests.get(f"{API_URL}/admin/preavisos/")
-        if res_m.status_code == 200:
-            mis = [p for p in res_m.json() if p.get('usuario_nombre') == user['nombre']]
-            if mis:
-                for mp in mis:
-                    est_mp = mp.get('estado', 'pendiente')
-                    c = "🟢" if est_mp == 'aceptado' else "🔴" if est_mp == 'rechazado' else "🟡"
-                    st.write(f"{c} {mp.get('fecha')} - {mp.get('tipo')}: {est_mp.upper()}")
-            else:
-                st.info("No tienes avisos registrados.")
-    except:
-        st.write("Cargando estados...")
-
-# --- SECCIÓN: MIS REGISTROS ---
-elif choice == "Mis Registros":
-    st.title("📊 Tu historial")
-    res = requests.get(f"{API_URL}/fichajes/{user['user_id']}")
-    if res.status_code == 200 and res.json():
-        df = pd.DataFrame(res.json())
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+elif choice == "Registros":
+    st.title("📊 Historial")
+    r = requests.get(f"{API_URL}/fichajes/{user['user_id']}")
+    if r.status_code == 200 and r.json():
+        df = pd.DataFrame(r.json())
         
-        hoy = datetime.now().date()
-        df_h = df[df['timestamp'].dt.date == hoy].sort_values('timestamp')
-        if len(df_h) >= 2:
-            h_trab = 0
-            ini = None
-            for _, fila in df_h.iterrows():
-                if fila['tipo'] == 'entrada': ini = fila['timestamp']
-                elif fila['tipo'] in ['comida', 'salida', 'descanso'] and ini:
-                    h_trab += (fila['timestamp'] - ini).total_seconds() / 3600
-                    ini = None
-            if h_trab > 0:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Horas Netas", f"{h_trab:.2f}h")
-                c2.metric("Objetivo", "8.00h")
-                c3.metric("Extras 🔥", f"{max(0, h_trab - 8):.2f}h")
-
-        st.download_button("📥 Descargar CSV", data=df.to_csv(index=False).encode('utf-8'), file_name="mis_fichajes.csv", mime="text/csv")
-        st.dataframe(df.assign(timestamp=df['timestamp'].dt.strftime('%d/%m/%Y %H:%M:%S'))[['tipo', 'timestamp', 'latitud', 'longitud']], use_container_width=True)
-
-        st.subheader("📍 Mapa de tus movimientos")
+        # Botón para exportar el historial a CSV tal como promete el README
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button(label="📥 Descargar historial en CSV", data=csv, file_name="historial_fichajes.csv", mime="text/csv")
+        
+        st.dataframe(df[['tipo', 'timestamp']], use_container_width=True)
         m_data = df[['latitud', 'longitud']].rename(columns={'latitud':'lat', 'longitud':'lon'}).dropna()
-        if not m_data.empty: st.map(m_data, zoom=13)
+        if not m_data.empty: st.map(m_data)
 
-# --- SECCIÓN: ADMINISTRACIÓN ---
 elif choice == "Administración":
-    # Creamos las 4 pestañas de nuevo
-    t1, t2, t3, t4 = st.tabs(["🕵️ Monitor de Tropa", "🆕 Alta de Esclavos", "⚠️ Alertas", "📂 Gestión Doc/Preavisos"])
+    st.title("🛡️ Panel de Control Superior (El Gran Hermano)")
+    
+    # Creamos las 4 pestañas con iconos Emojis
+    t1, t2, t3, t4 = st.tabs(["🕵️ Monitor", "🆕 Alta", "⚠️ Alertas", "📂 Gestión Doc/Preavisos"])
     
     with t1:
-        st.header("🕵️ Monitor en Tiempo Real")
-        r_mon = requests.get(f"{API_URL}/estado_usuarios/")
-        if r_mon.status_code == 200:
-            for emp in r_mon.json():
-                c_n, c_e, c_h = st.columns([2, 1, 1])
-                c_n.write(f"**{emp.get('nombre')}** ({emp.get('email')})")
-                status = emp.get('ultimo_evento')
-                if status == "entrada": c_e.success("🟢 Trabajando")
-                elif status in ["comida", "descanso"]: c_e.warning("🟡 Esquequeado")
-                elif status == "salida": c_e.error("🔴 Fuera")
-                else: c_e.info("⚪ Sin noticias")
-                c_h.write(f"🕒 {emp.get('hora', '--:--')}")
-                st.divider()
-        else:
-            st.error("No se puede espiar a la tropa ahora mismo.")
+        st.header("🕵️ Monitor de Tropa en Tiempo Real")
+        try:
+            r_mon = requests.get(f"{API_URL}/estado_usuarios/")
+            if r_mon.status_code == 200:
+                for emp in r_mon.json():
+                    with st.container(border=True):
+                        c_n, c_e, c_h = st.columns([2, 1, 1])
+                        c_n.write(f"**{emp.get('nombre')}** ({emp.get('email')})")
+                        
+                        status = emp.get('ultimo_evento')
+                        if status == "entrada": c_e.success("🟢 Trabajando")
+                        elif status in ["comida", "descanso"]: c_e.warning("🟡 Esquequeado")
+                        elif status == "salida": c_e.error("🔴 Fuera")
+                        else: c_e.info("⚪ Sin noticias")
+                        
+                        c_h.write(f"🕒 {emp.get('hora', '--:--')}")
+            else:
+                st.error("No se puede espiar a la tropa ahora mismo.")
+        except:
+            st.error("Error de conexión con el monitor.")
 
     with t2:
-        st.header("🆕 Registro de Súbditos")
+        st.header("🆕 Registro de Nuevos Súbditos")
         with st.form("nuevo_u_form", clear_on_submit=True):
             n = st.text_input("Nombre completo")
             e = st.text_input("Email corporativo")
             p = st.text_input("Contraseña provisional", type="password")
             r_rol = st.selectbox("Rol en la empresa", ["user", "admin"])
             if st.form_submit_button("Dar de alta"):
-                res_new = requests.post(f"{API_URL}/usuarios/", json={"nombre": n, "email": e, "password": p, "rol": r_rol})
-                if res_new.status_code == 200:
-                    st.success(f"Usuario {n} creado. Que empiece a producir.")
+                if n and e and p:
+                    res_new = requests.post(f"{API_URL}/usuarios/", json={"nombre": n, "email": e, "password": p, "rol": r_rol})
+                    if res_new.status_code == 200:
+                        st.success(f"Usuario {n} creado. Que empiece a producir.")
+                    else:
+                        st.error("Error al crear. ¿Ya existe ese email?")
                 else:
-                    st.error("Error al crear el usuario. ¿Ya existe ese email?")
+                    st.warning("Rellena todos los campos, Amado.")
 
     with t3:
-        st.header("⚠️ Historial de Incidencias")
+        st.header("⚠️ Historial de Incidencias de Fichaje")
         if st.button("🔄 Actualizar Alertas del Día"):
             requests.get(f"{API_URL}/alertas_fichaje/")
             st.toast("Alertas refrescadas")
             
-        res_users_alert = requests.get(f"{API_URL}/usuarios/")
-        if res_users_alert.status_code == 200:
-            u_list = {f"{u['nombre']}": u['id'] for u in res_users_alert.json()}
-            sospechoso = st.selectbox("Seleccionar sospechoso:", list(u_list.keys()))
-            if st.button(f"Ver historial de {sospechoso}"):
-                uid = u_list[sospechoso]
-                r_hist = requests.get(f"{API_URL}/historial_alertas/{uid}")
-                if r_hist.status_code == 200 and r_hist.json():
-                    st.table(pd.DataFrame(r_hist.json())[['fecha', 'motivo']])
-                else:
-                    st.success("Expediente limpio... de momento.")
+        try:
+            res_users_alert = requests.get(f"{API_URL}/usuarios/")
+            if res_users_alert.status_code == 200:
+                u_list = {f"{u['nombre']} ({u['email']})": u['id'] for u in res_users_alert.json()}
+                sospechoso = st.selectbox("Seleccionar sospechoso:", [""] + list(u_list.keys()))
+                
+                if sospechoso:
+                    if st.button(f"🔍 Ver historial de {sospechoso.split(' (')[0]}"):
+                        uid = u_list[sospechoso]
+                        r_hist = requests.get(f"{API_URL}/historial_alertas/{uid}")
+                        if r_hist.status_code == 200 and r_hist.json():
+                            # Limpiamos el JSON para la tabla
+                            df_alertas = pd.DataFrame(r_hist.json())[['fecha', 'motivo']]
+                            st.table(df_alertas)
+                        else:
+                            st.success("Expediente limpio... de momento.")
+        except:
+            st.error("Error al cargar la sección de alertas.")
 
     with t4:
         st.header("📂 Gestión de Documentos y Sentencias")
         
-        # 1. Envío de archivos
-        res_u_doc = requests.get(f"{API_URL}/usuarios/")
-        u_dict_doc = {u['nombre']: u['id'] for u in res_u_doc.json()} if res_u_doc.status_code == 200 else {}
-        
-        with st.expander("📤 Enviar nuevo archivo físico"):
-            with st.form("env_arch_form", clear_on_submit=True):
-                v_dest = st.selectbox("Destinatario:", list(u_dict_doc.keys()))
-                v_tit = st.text_input("Título del documento:")
-                v_file = st.file_uploader("Archivo:", type=['pdf', 'docx', 'jpg', 'png'])
-                if st.form_submit_button("Lanzar"):
-                    if v_file and v_tit:
-                        requests.post(f"{API_URL}/subir_documento/", data={"usuario_id": u_dict_doc[v_dest], "titulo": v_tit}, files={"archivo": (v_file.name, v_file.getvalue())})
-                        st.success("Enviado.")
+        # 1. Envío de archivos (FTPS Túnel)
+        try:
+            res_u_doc = requests.get(f"{API_URL}/usuarios/")
+            if res_u_doc.status_code == 200:
+                u_dict_doc = {f"{u['nombre']} ({u['email']})": u['id'] for u in res_u_doc.json()}
+                
+                with st.expander("📤 Enviar nuevo archivo físico (Nóminas, Sanciones...)"):
+                    with st.form("env_arch_form", clear_on_submit=True):
+                        v_dest = st.selectbox("Destinatario:", list(u_dict_doc.keys()))
+                        v_tit = st.text_input("Título del documento (ej: Nómina Marzo):")
+                        v_file = st.file_uploader("Archivo:", type=['pdf', 'docx', 'jpg', 'png'])
+                        
+                        if st.form_submit_button("Lanzar Archivo"):
+                            if v_file and v_tit and v_dest:
+                                # Usamos el endpoint de subida real que va al FTPS
+                                try:
+                                    res_up = requests.post(f"{API_URL}/subir_documento/", 
+                                                           data={"usuario_id": u_dict_doc[v_dest], "titulo": v_tit}, 
+                                                           files={"archivo": (v_file.name, v_file.getvalue())})
+                                    if "error" in res_up.json():
+                                        st.error(f"Error FTP: {res_up.json()['error']}")
+                                    else:
+                                        st.success("Enviado al túnel FTPS cifrado.")
+                                except:
+                                    st.error("Fallo al conectar con el túnel de subida.")
+                            else:
+                                st.warning("Faltan datos para el envío.")
+        except:
+            st.error("No se pueden cargar usuarios para el envío.")
 
         # 2. Control de lectura
+        st.divider()
         st.subheader("📊 Chivatazo de Lectura")
-        r_ctrl = requests.get(f"{API_URL}/admin/documentos/")
-        if r_ctrl.status_code == 200 and r_ctrl.json():
-            st.table([{"Empleado": d.get("usuario_nombre"), "Doc": d.get("titulo"), "Leído": "✅" if d.get("leido") else "❌"} for d in r_ctrl.json()])
+        try:
+            r_ctrl = requests.get(f"{API_URL}/admin/documentos/")
+            if r_ctrl.status_code == 200 and r_ctrl.json():
+                d_list = []
+                for d in r_ctrl.json():
+                    d_list.append({
+                        "Empleado": d.get("usuario_nombre"),
+                        "Doc": d.get("titulo"),
+                        "Leído": "✅ SÍ" if d.get("leido") else "❌ NO"
+                    })
+                st.table(d_list)
+            else:
+                st.info("Nadie ha leído nada aún.")
+        except:
+            st.write("Cargando chivatazos...")
 
         # 3. Juez de Preavisos (EL MAZO)
         st.divider()
-        st.subheader("📬 Juez de Preavisos")
-        res_p_adm = requests.get(f"{API_URL}/admin/preavisos/")
-        if res_p_adm.status_code == 200:
-            p_p = [p for p in res_p_adm.json() if p.get('estado', 'pendiente') == 'pendiente']
-            if p_p:
-                for p in p_p:
-                    with st.container(border=True):
-                        c_inf, c_btns = st.columns([3, 2])
-                        c_inf.write(f"**{p.get('usuario_nombre')}** - {p.get('tipo')} ({p.get('fecha')})\n\n{p.get('motivo')}")
-                        b_ok, b_no = c_btns.columns(2)
-                        if b_ok.button("✅ Aceptar", key=f"ok_adm_{p['id']}", use_container_width=True):
-                            requests.post(f"{API_URL}/admin/decidir_preaviso/{p['id']}", json={"estado": "aceptado"})
-                            st.rerun()
-                        if b_no.button("❌ Rechazar", key=f"no_adm_{p['id']}", use_container_width=True, type="primary"):
-                            requests.post(f"{API_URL}/admin/decidir_preaviso/{p['id']}", json={"estado": "rechazado"})
-                            st.rerun()
-            else: st.info("Sin juicios pendientes.")
+        st.subheader("📬 Juez de Preavisos (Pendientes de Sentencia)")
+        
+        try:
+            res_p_adm = requests.get(f"{API_URL}/admin/preavisos/")
+            if res_p_adm.status_code == 200:
+                # Filtramos con seguridad usando .get()
+                p_pendientes = [p for p in res_p_adm.json() if p.get('estado', 'pendiente') == 'pendiente']
+                
+                if p_pendientes:
+                    for p in p_pendientes:
+                        # Claves únicas para los botones
+                        id_p = p.get('id')
+                        with st.container(border=True):
+                            c_inf, c_btns = st.columns([3, 2])
+                            
+                            c_inf.write(f"**{p.get('usuario_nombre', 'Desconocido')}** - {p.get('tipo')} ({p.get('fecha')})")
+                            c_inf.caption(f"Motivo: {p.get('motivo', 'Sin motivo')}")
+                            
+                            btn_ok, btn_no = c_btns.columns(2)
+                            
+                            if btn_ok.button("✅ Aceptar", key=f"ok_{id_p}", use_container_width=True):
+                                res_dec = requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "aceptado"})
+                                if res_dec.status_code == 200:
+                                    st.rerun()
+                                
+                            if btn_no.button("❌ Rechazar", key=f"no_{id_p}", use_container_width=True, type="primary"):
+                                res_dec = requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "rechazado"})
+                                if res_dec.status_code == 200:
+                                    st.rerun()
+                else:
+                    st.info("No hay sentencias pendientes. La tropa se porta bien.")
+            else:
+                st.error("Error al conectar con el buzón de preavisos.")
+        except:
+            st.error("Cargando mazo de juez...")

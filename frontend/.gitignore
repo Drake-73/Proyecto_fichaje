@@ -1,5 +1,0 @@
-db_data/
-__pycache__/
-*.pyc
-frontend/__pycache__/
-backend/__pycache__/
