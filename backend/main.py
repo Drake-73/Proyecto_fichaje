@@ -5,7 +5,7 @@ from sqlalchemy import create_engine, Column, Integer, String, Float, DateTime, 
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 from pydantic import BaseModel
-from datetime import datetime, date, time as dt_time
+from datetime import datetime, date, time as dt_time, timedelta
 import os
 import time
 import ssl
@@ -13,6 +13,7 @@ import io
 from ftplib import FTP
 from sqlalchemy.exc import OperationalError, IntegrityError
 from passlib.context import CryptContext
+import random
 
 # Creamos la aplicación. El nombre es lo de menos, lo importante es que funcione (a veces).
 app = FastAPI()
@@ -74,6 +75,7 @@ class Preaviso(Base):
     motivo = Column(String)
     visto_admin = Column(Boolean, default=False)
     estado = Column(String, default="pendiente")
+    visto_usuario = Column(Boolean, default=False)
 
 class Alerta(Base):
     # Las alertas, porque siempre hay alguien que no cumple.
@@ -99,6 +101,97 @@ for i in range(5):
             admin_pass = get_password_hash("1234")
             db.add(Usuario(nombre="ASIR Admin", email="admin@asir.com", password_hash=admin_pass, rol="admin"))
             db.commit()
+
+        # --- INICIO DE LA CREACIÓN DE DATOS DE PRUEBA ---
+        # Porque una base de datos vacía es como un jardín sin malas hierbas, demasiado perfecto para ser real.
+        if not db.query(Usuario).filter(Usuario.email == "juan.perez@asir.com").first():
+            print("Creando datos de prueba, porque alguien tiene que hacer el trabajo sucio...")
+            
+            # Antes de crear a los buenos, limpiemos la basura que pudimos haber creado antes.
+            # Adiós, @empresa.com, nadie os echará de menos.
+            print("Buscando y eliminando usuarios obsoletos de @empresa.com...")
+            usuarios_obsoletos = db.query(Usuario).filter(Usuario.email.like('%@empresa.com')).all()
+            if usuarios_obsoletos:
+                for u in usuarios_obsoletos:
+                    # Hay que borrar todo lo relacionado con el usuario, no solo el usuario.
+                    # O podríamos tener una base de datos llena de fantasmas con relaciones rotas.
+                    db.query(Fichaje).filter(Fichaje.usuario_id == u.id).delete()
+                    db.query(Documento).filter(Documento.usuario_id == u.id).delete()
+                    db.query(Preaviso).filter(Preaviso.usuario_id == u.id).delete()
+                    db.query(Alerta).filter(Alerta.usuario_id == u.id).delete()
+                    db.delete(u)
+                db.commit()
+                print(f"{len(usuarios_obsoletos)} usuarios de @empresa.com eliminados. No se volverá a hablar de ellos.")
+            else:
+                print("No se encontraron usuarios de @empresa.com. Todo en orden.")
+            
+            usuarios_prueba = [
+                {"nombre": "Juan Pérez", "email": "juan.perez@asir.com"},
+                {"nombre": "María García", "email": "maria.garcia@asir.com"},
+                {"nombre": "Carlos Sánchez", "email": "carlos.sanchez@asir.com"},
+                {"nombre": "Laura Rodríguez", "email": "laura.rodriguez@asir.com"},
+            ]
+            
+            password_hash = get_password_hash("1234")
+            hoy = date.today()
+            jerez_lat, jerez_lon = 36.68, -6.12
+
+            for user_data in usuarios_prueba:
+                # Dando de alta a los nuevos reclutas
+                nuevo_usuario = Usuario(nombre=user_data["nombre"], email=user_data["email"], password_hash=password_hash, rol="user")
+                db.add(nuevo_usuario)
+                db.flush()
+
+                # Ahora, a fabricarles un pasado laboral de 30 días.
+                for i in range(30):
+                    dia_actual = hoy - timedelta(days=i)
+                    
+                    if dia_actual.weekday() >= 5: continue
+
+                    if random.random() < 0.05:
+                        db.add(Alerta(usuario_id=nuevo_usuario.id, motivo="Falta injustificada", fecha=dia_actual))
+                        if random.random() < 0.5:
+                            db.add(Preaviso(usuario_id=nuevo_usuario.id, tipo="Falta", fecha_ausencia=dia_actual, motivo="Asuntos personales (la excusa universal)", estado=random.choice(["aceptado", "rechazado"])))
+                        continue
+
+                    hora_entrada = datetime.combine(dia_actual, dt_time(9, 0)) + timedelta(minutes=random.randint(-15, 30))
+                    db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="entrada", timestamp=hora_entrada, latitud=jerez_lat + random.uniform(-0.01, 0.01), longitud=jerez_lon + random.uniform(-0.01, 0.01)))
+                    
+                    if hora_entrada.minute > 15 and hora_entrada.hour == 9:
+                         db.add(Alerta(usuario_id=nuevo_usuario.id, motivo="Retraso", fecha=dia_actual))
+                         if random.random() < 0.3:
+                            db.add(Preaviso(usuario_id=nuevo_usuario.id, tipo="Retraso", fecha_ausencia=dia_actual, motivo="Atasco, el perro se comió los deberes, etc.", estado="pendiente"))
+
+                    hora_salida = datetime.combine(dia_actual, dt_time(18, 0)) + timedelta(minutes=random.randint(-30, 30))
+                    db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="salida", timestamp=hora_salida, latitud=jerez_lat + random.uniform(-0.01, 0.01), longitud=jerez_lon + random.uniform(-0.01, 0.01)))
+
+                    if random.random() < 0.7:
+                        hora_descanso_ini = datetime.combine(dia_actual, dt_time(11, 0)) + timedelta(minutes=random.randint(0, 30))
+                        hora_descanso_fin = hora_descanso_ini + timedelta(minutes=random.randint(15, 25))
+                        db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="descanso", timestamp=hora_descanso_ini, latitud=jerez_lat, longitud=jerez_lon))
+                        db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="entrada", timestamp=hora_descanso_fin, latitud=jerez_lat, longitud=jerez_lon))
+                    
+                    hora_comida_ini = datetime.combine(dia_actual, dt_time(14, 0)) + timedelta(minutes=random.randint(-15, 15))
+                    hora_comida_fin = hora_comida_ini + timedelta(hours=1, minutes=random.randint(-5, 15))
+                    db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="comida", timestamp=hora_comida_ini, latitud=jerez_lat, longitud=jerez_lon))
+                    db.add(Fichaje(usuario_id=nuevo_usuario.id, tipo="entrada", timestamp=hora_comida_fin, latitud=jerez_lat, longitud=jerez_lon))
+
+            # --- AÑADIR PREAVISOS PENDIENTES PARA PRUEBAS ---
+            # Ahora, vamos a generar unas cuantas súplicas pendientes para que el admin tenga algo que hacer.
+            print("Generando solicitudes de preaviso pendientes para la bandeja del admin...")
+            usuarios_creados = db.query(Usuario).filter(Usuario.email.in_([u['email'] for u in usuarios_prueba])).all()
+            if len(usuarios_creados) >= 3:
+                # Un clásico: la cita médica.
+                db.add(Preaviso(usuario_id=usuarios_creados[0].id, tipo="Retraso", fecha_ausencia=date.today() + timedelta(days=2), motivo="Cita médica a primera hora. Llegaré en cuanto pueda.", estado="pendiente"))
+                # El día de asuntos propios, un derecho casi divino.
+                db.add(Preaviso(usuario_id=usuarios_creados[1].id, tipo="Falta", fecha_ausencia=date.today() + timedelta(days=10), motivo="Día de asuntos propios. No es negociable.", estado="pendiente"))
+                # Y la excusa vaga que podría ser cualquier cosa.
+                db.add(Preaviso(usuario_id=usuarios_creados[2].id, tipo="Falta", fecha_ausencia=date.today() + timedelta(days=5), motivo="Gestiones personales que no puedo posponer.", estado="pendiente"))
+
+            db.commit()
+            print("Datos de prueba creados. La simulación de una oficina real ha comenzado.")
+        # --- FIN DE LA CREACIÓN DE DATOS DE PRUEBA ---
+
         db.close()
         break
     except OperationalError: time.sleep(5)
@@ -210,6 +303,21 @@ def mis_docs(uid: int, db: Session = Depends(get_db)):
     # El usuario quiere ver los documentos que le han enviado. Qué curioso.
     return db.query(Documento).filter(Documento.usuario_id == uid).all()
 
+@app.get("/mis_preavisos/{user_id}")
+def mis_preavisos(user_id: int, db: Session = Depends(get_db)):
+    # Devuelve los preavisos de un usuario para que sepa si le han aceptado las vacaciones o no.
+    return db.query(Preaviso).filter(Preaviso.usuario_id == user_id).order_by(Preaviso.fecha_ausencia.desc()).all()
+
+@app.post("/marcar_preaviso_visto/{preaviso_id}")
+def marcar_visto(preaviso_id: int, db: Session = Depends(get_db)):
+    # Para que el usuario pueda decir "vale, ya me he enterado", y no le volvamos a molestar.
+    p = db.query(Preaviso).filter(Preaviso.id == preaviso_id).first()
+    if p:
+        p.visto_usuario = True
+        db.commit()
+        return {"status": "ok"}
+    raise HTTPException(status_code=404, detail="Preaviso no encontrado")
+
 @app.get("/admin/documentos/")
 def admin_docs(db: Session = Depends(get_db)):
     # El admin quiere ver quién ha leído qué. El chivato definitivo.
@@ -226,7 +334,7 @@ def preaviso(p: PreavisoData, db: Session = Depends(get_db)):
 def admin_preavisos(db: Session = Depends(get_db)):
     # El admin revisa los preavisos. El poder de aceptar o rechazar. Qué subidón.
     res = db.query(Preaviso, Usuario.nombre).join(Usuario).all()
-    return [{"id": p.id, "usuario_nombre": n, "tipo": p.tipo, "fecha": p.fecha_ausencia.isoformat(), "motivo": p.motivo, "estado": p.estado} for p, n in res]
+    return [{"id": p.id, "usuario_nombre": n, "tipo": p.tipo, "fecha_ausencia": p.fecha_ausencia.isoformat(), "motivo": p.motivo, "estado": p.estado} for p, n in res]
 
 @app.post("/admin/decidir_preaviso/{pid}")
 def decidir(pid: int, d: DecisionData, db: Session = Depends(get_db)):

@@ -3,8 +3,9 @@ import streamlit as st
 import requests
 import os
 import pandas as pd
-from streamlit_js_eval import get_geolocation
-from datetime import datetime
+from streamlit_js_eval import get_geolocation, streamlit_js_eval
+from datetime import datetime, timedelta
+import json
 # Configuramos la página. Título, icono... lo típico para que parezca profesional.
 st.set_page_config(page_title="ASIR GPS Control", page_icon="🕒", layout="wide")
 
@@ -22,6 +23,27 @@ if "seccion" not in st.session_state:
     # Por defecto, todo el mundo quiere fichar. O eso nos gusta pensar.
     st.session_state.seccion = "Fichar"
 
+# Intentamos recuperar la sesión del localStorage si no estamos logueados en el estado de Streamlit.
+# Esto es un apaño para sobrevivir a los F5 (actualizaciones de página).
+if not st.session_state.logged_in:
+    try:
+        # Pedimos al navegador que nos devuelva lo que guardamos en 'user_session'.
+        session_str = streamlit_js_eval(js_expressions="localStorage.getItem('user_session')", key='get_session')
+        if session_str:
+            session_data = json.loads(session_str)
+            expiry_time = datetime.fromisoformat(session_data['expiry'])
+            
+            # Si la sesión no ha caducado, nos volvemos a loguear mágicamente.
+            if datetime.now() < expiry_time:
+                st.session_state.logged_in = True
+                st.session_state.user_info = session_data['user_info']
+            else:
+                # La sesión ha caducado, la borramos para no volver a intentarlo.
+                streamlit_js_eval(js_expressions="localStorage.removeItem('user_session')", key='remove_session_expired')
+    except Exception:
+        # Si algo explota (que podría), simplemente lo ignoramos y mostramos el login.
+        pass
+
 # El gran muro: si no estás en la lista, no pasas.
 if not st.session_state.logged_in:
     st.title("🔐 Identifícate")
@@ -32,7 +54,20 @@ if not st.session_state.logged_in:
             res = requests.post(f"{API_URL}/login", json={"email": e, "password": p})
             if res.status_code == 200:
                 st.session_state.logged_in = True
-                st.session_state.user_info = res.json(); st.rerun()
+                user_info = res.json()
+                st.session_state.user_info = user_info
+                
+                # Guardamos la sesión en el navegador del cliente con una caducidad de 10 minutos.
+                # Es como escribir una nota en la mano del usuario para que no se nos olvide quién es si se va y vuelve rápido.
+                expiry_time = datetime.now() + timedelta(minutes=10)
+                session_data = {
+                    'user_info': user_info,
+                    'expiry': expiry_time.isoformat()
+                }
+                session_str = json.dumps(session_data)
+                # Usamos JS para meterle la sesión en el localStorage. Con comillas ` para que no se rompa.
+                streamlit_js_eval(js_expressions=f"localStorage.setItem('user_session', `{session_str}`)", key='set_session')
+                st.rerun()
             else:
                 st.error("Credenciales incorrectas")
     st.stop()
@@ -50,13 +85,39 @@ if user['rol'] == 'admin':
 
 # La puerta de salida. No la usarán, ¿verdad?
 if st.sidebar.button("🏃‍♂️ Salir", use_container_width=True):
-    st.session_state.logged_in = False; st.rerun()
+    # Si el usuario se va, borramos la nota de su mano (localStorage).
+    streamlit_js_eval(js_expressions="localStorage.removeItem('user_session')", key='remove_session_logout')
+    # Y también limpiamos el estado de la sesión de Streamlit.
+    st.session_state.logged_in = False
+    st.session_state.user_info = {}
+    st.rerun()
 
 choice = st.session_state.seccion
 
 # Sección de Fichaje: el corazón de esta humilde aplicación.
 if choice == "Fichar":
     st.title("🚀 Fichar")
+    # Notificaciones para el proletariado, para que sepan si pueden o no irse de puente.
+    try:
+        res_mis_preavisos = requests.get(f"{API_URL}/mis_preavisos/{user['user_id']}")
+        if res_mis_preavisos.status_code == 200:
+            notificaciones = [p for p in res_mis_preavisos.json() if p.get('estado') != 'pendiente' and not p.get('visto_usuario')]
+            if notificaciones:
+                with st.expander("🔔 Tienes notificaciones de preavisos", expanded=True):
+                    for p in notificaciones:
+                        col1, col2 = st.columns([4,1])
+                        msg = f"Tu solicitud de '{p.get('tipo')}' para el {p.get('fecha_ausencia')} ha sido **{p.get('estado')}**."
+                        if p.get('estado') == 'aceptado':
+                            col1.success(msg)
+                        else:
+                            col1.error(msg)
+                        
+                        if col2.button("Marcar como leído", key=f"visto_{p.get('id')}"):
+                            requests.post(f"{API_URL}/marcar_preaviso_visto/{p.get('id')}")
+                            st.rerun()
+    except requests.exceptions.RequestException:
+        # Si no hay conexión, pues no hay notificaciones. Tampoco es el fin del mundo.
+        pass
     # Primero, recordémosle al usuario los documentos que no ha leído. Presión social.
     res_d = requests.get(f"{API_URL}/mis_documentos/{user['user_id']}")
     if res_d.status_code == 200 and res_d.json():
@@ -89,7 +150,7 @@ if choice == "Fichar":
         fp = st.date_input("Día")
         mp = st.text_area("Motivo")
         if st.form_submit_button("Enviar"):
-            res_prev = requests.post(f"{API_URL}/preavisos/", json={"usuario_id": user['user_id'], "tipo": tp, "fecha": str(fp), "motivo": mp})
+            res_prev = requests.post(f"{API_URL}/preavisos/", json={"usuario_id": user['user_id'], "tipo": tp.lower(), "fecha": str(fp), "motivo": mp})
             if res_prev.status_code == 200:
                 st.success("Preaviso enviado correctamente.")
             else:
@@ -104,8 +165,13 @@ elif choice == "Registros":
         df = pd.DataFrame(r.json())
         # Y por si quieren una copia para sus propios archivos... o para el abogado.
         csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(label="📥 Descargar historial en CSV", data=csv, file_name="historial_fichajes.csv", mime="text/csv")
-        st.dataframe(df[['tipo', 'timestamp']], use_container_width=True)
+        file_name = f"historial_fichajes_{user['nombre'].replace(' ', '_')}.csv"
+        st.download_button(label="📥 Descargar historial en CSV", data=csv, file_name=file_name, mime="text/csv")
+        # Hacemos una copia para maquillar la fecha y que parezca legible por humanos, sin estropear el original.
+        df_display = df.copy()
+        df_display['timestamp'] = pd.to_datetime(df_display['timestamp']).dt.strftime('%d/%m/%Y %H:%M:%S')
+        df_display['tipo'] = df_display['tipo'].str.capitalize()
+        st.dataframe(df_display[['tipo', 'timestamp']], use_container_width=True)
         # Un mapa para que vean todos los sitios donde han estado... trabajando, claro.
         m_data = df[['latitud', 'longitud']].rename(columns={'latitud':'lat', 'longitud':'lon'}).dropna()
         if not m_data.empty: st.map(m_data)
@@ -210,17 +276,54 @@ elif choice == "Administración":
         try:
             res_p_adm = requests.get(f"{API_URL}/admin/preavisos/")
             if res_p_adm.status_code == 200:
-                p_pendientes = [p for p in res_p_adm.json() if p.get('estado') == 'pendiente']
+                todos_los_preavisos = res_p_adm.json()
+                p_pendientes = [p for p in todos_los_preavisos if p.get('estado') == 'pendiente']
+                p_procesados = [p for p in todos_los_preavisos if p.get('estado') != 'pendiente']
+
+                st.subheader("Solicitudes Pendientes de Sentencia")
+                if not p_pendientes:
+                    st.info("No hay solicitudes pendientes. Puede ir a por un café.")
+
                 for p in p_pendientes:
                     # Para cada súplica, un par de botones: el pulgar arriba o el pulgar abajo.
                     id_p = p.get('id')
                     with st.container(border=True):
                         c_inf, c_btns = st.columns([3, 2])
-                        c_inf.write(f"**{p.get('usuario_nombre')}** - {p.get('tipo')} ({p.get('fecha')})")
+                        c_inf.write(f"**{p.get('usuario_nombre')}** - {p.get('tipo').capitalize()} ({p.get('fecha_ausencia')})")
+                        c_inf.caption(f"Motivo: {p.get('motivo')}")
+                        c_inf.info("Estado: Pendiente de sentencia")
                         btn_ok, btn_no = c_btns.columns(2)
                         if btn_ok.button("✅ Aceptar", key=f"ok_{id_p}"):
-                            if requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "aceptado"}).status_code == 200: st.rerun()
+                            try:
+                                res = requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "aceptado"})
+                                res.raise_for_status()  # Lanza un error si la petición falla (no es 2xx)
+                                st.rerun()
+                            except requests.exceptions.RequestException as e_post:
+                                st.error(f"Error al procesar la solicitud: {e_post}")
                         if btn_no.button("❌ Rechazar", key=f"no_{id_p}", type="primary"):
-                            if requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "rechazado"}).status_code == 200: st.rerun()
-        except:
-            st.error("Error en preavisos.")
+                            try:
+                                res = requests.post(f"{API_URL}/admin/decidir_preaviso/{id_p}", json={"estado": "rechazado"})
+                                res.raise_for_status()
+                                st.rerun()
+                            except requests.exceptions.RequestException as e_post:
+                                st.error(f"Error al procesar la solicitud: {e_post}")
+                
+                st.divider()
+                st.subheader("Historial de Solicitudes Procesadas")
+                if p_procesados:
+                    df_procesados = pd.DataFrame(p_procesados)
+                    df_procesados['fecha_ausencia'] = pd.to_datetime(df_procesados['fecha_ausencia']).dt.strftime('%d/%m/%Y')
+                    df_procesados['tipo'] = df_procesados['tipo'].str.capitalize()
+                    df_procesados['estado'] = df_procesados['estado'].str.capitalize()
+                    st.dataframe(df_procesados[['usuario_nombre', 'tipo', 'fecha_ausencia', 'motivo', 'estado']].rename(columns={
+                        'usuario_nombre': 'Empleado',
+                        'tipo': 'Tipo',
+                        'fecha_ausencia': 'Fecha',
+                        'motivo': 'Motivo',
+                        'estado': 'Veredicto'
+                    }), use_container_width=True)
+                else:
+                    st.info("Aún no se ha procesado ninguna solicitud.")
+
+        except requests.exceptions.RequestException as e:
+            st.error(f"Error de conexión en preavisos: {e}")
