@@ -1,6 +1,7 @@
-
+# Aquí orquestamos el caos. Cada servicio es un pequeño mundo de alegría y desesperación.
 services:
   db:
+    # La base de datos, el cerebro de la operación. Si se cae, nos caemos todos.
     image: postgres:15-alpine
     container_name: asir_db
     restart: always
@@ -14,6 +15,7 @@ services:
       - asir_network
 
   backend:
+    # El backend, la lógica oscura que nadie entiende pero que, milagrosamente, funciona.
     build: ./backend
     container_name: asir_backend
     restart: always
@@ -32,6 +34,7 @@ services:
       - asir_network
 
   frontend:
+    # El frontend, la cara bonita. Lo que el usuario ve y con lo que interactúa. Pobre de él.
     build: ./frontend
     container_name: asir_frontend
     restart: always
@@ -47,6 +50,7 @@ services:
       - asir_network
 
   ftps_server:
+    # Un servidor FTP en pleno siglo XXI. Porque somos unos románticos y nos gusta lo retro.
     image: stilliard/pure-ftpd
     container_name: asir_ftps
     restart: always
@@ -66,6 +70,7 @@ services:
       - asir_network
 
   adminer:
+    # Adminer, para cotillear la base de datos directamente. Porque a veces no nos fiamos de nuestra propia API.
     image: adminer
     container_name: asir_adminer
     restart: always
@@ -75,5 +80,6 @@ services:
       - asir_network
 
 networks:
+  # La red que une a todos nuestros servicios. Como una gran familia disfuncional.
   asir_network:
     driver: bridge
