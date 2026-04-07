@@ -101,12 +101,14 @@ if choice == "Fichar":
     try:
         res_mis_preavisos = requests.get(f"{API_URL}/mis_preavisos/{user['user_id']}")
         if res_mis_preavisos.status_code == 200:
-            notificaciones = [p for p in res_mis_preavisos.json() if p.get('estado') != 'pendiente' and not p.get('visto_usuario')]
+            todos_mis_preavisos = res_mis_preavisos.json()
+            notificaciones = [p for p in todos_mis_preavisos if p.get('estado') != 'pendiente' and not p.get('visto_usuario')]
             if notificaciones:
                 with st.expander("🔔 Tienes notificaciones de preavisos", expanded=True):
                     for p in notificaciones:
                         col1, col2 = st.columns([4,1])
-                        msg = f"Tu solicitud de '{p.get('tipo')}' para el {p.get('fecha_ausencia')} ha sido **{p.get('estado')}**."
+                        fecha_formateada = datetime.strptime(p.get('fecha_ausencia'), '%Y-%m-%d').strftime('%d/%m/%Y')
+                        msg = f"Tu solicitud de '{p.get('tipo').capitalize()}' para el {fecha_formateada} ha sido **{p.get('estado')}**."
                         if p.get('estado') == 'aceptado':
                             col1.success(msg)
                         else:
@@ -115,6 +117,14 @@ if choice == "Fichar":
                         if col2.button("Marcar como leído", key=f"visto_{p.get('id')}"):
                             requests.post(f"{API_URL}/marcar_preaviso_visto/{p.get('id')}")
                             st.rerun()
+            
+            # Mostramos también las que están pendientes, para que el trabajador sepa que no han caído en el olvido.
+            solicitudes_pendientes = [p for p in todos_mis_preavisos if p.get('estado') == 'pendiente']
+            if solicitudes_pendientes:
+                with st.expander("⏳ Solicitudes pendientes de sentencia"):
+                    for p in solicitudes_pendientes:
+                        fecha_formateada = datetime.strptime(p.get('fecha_ausencia'), '%Y-%m-%d').strftime('%d/%m/%Y')
+                        st.info(f"Tu solicitud de '{p.get('tipo').capitalize()}' para el {fecha_formateada} está pendiente de revisión.")
     except requests.exceptions.RequestException:
         # Si no hay conexión, pues no hay notificaciones. Tampoco es el fin del mundo.
         pass
@@ -289,7 +299,8 @@ elif choice == "Administración":
                     id_p = p.get('id')
                     with st.container(border=True):
                         c_inf, c_btns = st.columns([3, 2])
-                        c_inf.write(f"**{p.get('usuario_nombre')}** - {p.get('tipo').capitalize()} ({p.get('fecha_ausencia')})")
+                        fecha_formateada = datetime.strptime(p.get('fecha_ausencia'), '%Y-%m-%d').strftime('%d/%m/%Y')
+                        c_inf.write(f"**{p.get('usuario_nombre')}** - {p.get('tipo').capitalize()} ({fecha_formateada})")
                         c_inf.caption(f"Motivo: {p.get('motivo')}")
                         c_inf.info("Estado: Pendiente de sentencia")
                         btn_ok, btn_no = c_btns.columns(2)
